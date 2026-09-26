@@ -1,6 +1,3 @@
-import { readdir } from "node:fs/promises";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import type { CardEntry, VocabItem } from "./types";
 
 const ANKI_CONNECT_URL = process.env.ANKI_CONNECT_URL || "http://127.0.0.1:8765";
@@ -245,8 +242,8 @@ async function syncCard(
   return { status: "unchanged" };
 }
 
-async function loadModule(filePath: string): Promise<{ deckName: string; cards: NormalizedCard[] }> {
-  const mod = await import(pathToFileURL(filePath).href);
+async function loadModule(file: string): Promise<{ deckName: string; cards: NormalizedCard[] }> {
+  const mod = await import(`./data/${file}`);
   const data = mod.default || mod;
   const deckName = (typeof data.deck === "string" ? data.deck : mod.deck) || "Deutsch";
 
@@ -282,19 +279,17 @@ async function main() {
       .map((n) => [n.fields.UID.value, { id: n.noteId, fields: n.fields }])
   );
 
-  const dataDir = join(process.cwd(), "data");
-  const files = (await readdir(dataDir)).filter((f) => f.endsWith(".ts"));
+  const files = Array.from(new Bun.Glob("*.ts").scanSync("data"));
 
   if (files.length === 0) {
-    console.log(`No .ts files found in ${dataDir}.`);
+    console.log("No .ts files found in data/.");
     return;
   }
 
   const seenUids = new Map<string, string>(); // uid -> filePath
 
   for (const file of files) {
-    const fullPath = join(dataDir, file);
-    const { deckName, cards } = await loadModule(fullPath);
+    const { deckName, cards } = await loadModule(file);
     await ankiConnect("createDeck", { deck: deckName });
 
     console.log(`\n📂 ${file} -> "${deckName}" (${cards.length} cards)`);
