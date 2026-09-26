@@ -4,9 +4,9 @@ export const deck = "Deutsch";
 
 export const nouns: VocabItem[] = [
   {
-    de: "der Pullover",
+    de: "der Pullover, -",
     en: "the sweater",
-    notes: "Nouns ending in -er are typically masculine | Plural: die Pullover",
+    notes: "Nouns ending in -er are typically masculine",
     tags: ["noun"],
     cards: [
       "Zieh einen warmen [Pullover] an.",
