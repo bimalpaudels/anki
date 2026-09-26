@@ -7,8 +7,7 @@ A type-safe, progress-preserving Anki sync engine built in TypeScript and powere
 ```text
 anki/
 ├── data/
-│   ├── verbs.ts       # Verbs data file
-│   ├── nouns.ts       # Nouns data file
+│   ├── 001_example.ts # Example data (noun, verb, adjective, idiom)
 │   └── <topic>.ts     # Any .ts file placed here is auto-discovered!
 ├── templates/
 │   ├── card.css       # Anki card CSS (gender colors, night mode)
