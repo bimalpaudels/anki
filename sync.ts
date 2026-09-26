@@ -1,8 +1,32 @@
 import type { CardEntry, Tag, VocabItem } from "./types";
 
-const ANKI_CONNECT_URL = process.env.ANKI_CONNECT_URL || "http://127.0.0.1:8765";
+const ANKI_CONNECT_URL = Bun.env.ANKI_CONNECT_URL || "http://127.0.0.1:8765";
 const MODEL_NAME = "GermanCard";
 const MODEL_FIELDS = ["UID", "FrontEn", "FrontSentence", "BackDe", "BackSentence", "Notes"];
+
+interface NormalizedCard {
+  uid: string;
+  deck: string;
+  frontEn: string;
+  frontSentence: string;
+  backDe: string;
+  backSentence: string;
+  notes: string;
+  tags: Tag[];
+}
+
+interface ExistingNote {
+  id: number;
+  fields: Record<string, { value: string; order: number }>;
+  tags: string[];
+}
+
+interface SyncResult {
+  status: "created" | "updated" | "unchanged";
+  diffs?: string[];
+}
+
+const cardLabel = (uid: string) => uid.split("::").slice(1).join("::");
 
 async function ankiConnect<T = unknown>(action: string, params: Record<string, unknown> = {}): Promise<T> {
   let res: Response;
@@ -78,19 +102,6 @@ function parseSentence(raw?: string): { frontSentence: string; backSentence: str
   };
 }
 
-interface NormalizedCard {
-  uid: string;
-  deck: string;
-  frontEn: string;
-  frontSentence: string;
-  backDe: string;
-  backSentence: string;
-  notes: string;
-  tags: Tag[];
-}
-
-const cardLabel = (uid: string) => uid.split("::").slice(1).join("::");
-
 function extractCards(deckName: string, item: VocabItem, fileTags: Tag[] = []): NormalizedCard[] {
   const baseId = slugify(item.de);
   const tagSet = new Set<Tag>([...fileTags, ...(item.tags || [])]);
@@ -114,17 +125,6 @@ function extractCards(deckName: string, item: VocabItem, fileTags: Tag[] = []): 
       tags,
     };
   });
-}
-
-interface ExistingNote {
-  id: number;
-  fields: Record<string, { value: string; order: number }>;
-  tags: string[];
-}
-
-interface SyncResult {
-  status: "created" | "updated" | "unchanged";
-  diffs?: string[];
 }
 
 async function syncCard(

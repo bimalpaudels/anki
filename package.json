@@ -4,5 +4,8 @@
   "description": "Idempotent Anki sync script using Bun and TypeScript",
   "scripts": {
     "sync": "bun run sync.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.2"
   }
 }
