@@ -183,7 +183,7 @@ function extractCards(deckName: string, item: VocabItem, fileTags: Tag[] = []): 
 async function loadModule(file: string): Promise<{ deckName: string; cards: NormalizedCard[] }> {
   const mod = await import(`./data/${file}`);
   const data = mod.default || mod;
-  const deckName = (typeof data.deck === "string" ? data.deck : mod.deck) || "Deutsch";
+  const deckName = (typeof data.deck === "string" ? data.deck : mod.deck) || "deutsch";
   const fileTags: Tag[] = Array.isArray(data.tags) ? data.tags : Array.isArray(mod.tags) ? mod.tags : [];
 
   const items: VocabItem[] = [];
