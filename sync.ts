@@ -4,7 +4,7 @@ const ANKI_CONNECT_URL = process.env.ANKI_CONNECT_URL || "http://127.0.0.1:8765"
 const MODEL_NAME = "GermanCard";
 const MODEL_FIELDS = ["UID", "FrontEn", "FrontSentence", "BackDe", "BackSentence", "Notes"];
 
-async function ankiConnect(action: string, params: Record<string, any> = {}): Promise<any> {
+async function ankiConnect<T = unknown>(action: string, params: Record<string, unknown> = {}): Promise<T> {
   let res: Response;
   try {
     res = await fetch(ANKI_CONNECT_URL, {
@@ -12,11 +12,12 @@ async function ankiConnect(action: string, params: Record<string, any> = {}): Pr
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action, version: 6, params }),
     });
-  } catch (err: any) {
-    throw new Error(`Could not connect to Anki at ${ANKI_CONNECT_URL} (${err.message})`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Could not connect to Anki at ${ANKI_CONNECT_URL} (${msg})`);
   }
 
-  const result = await res.json();
+  const result = (await res.json()) as { error: string | null; result: T };
   if (result.error) throw new Error(`AnkiConnect Error [${action}]: ${result.error}`);
   return result.result;
 }
@@ -35,7 +36,7 @@ async function ensureModelExists() {
       css,
       cardTemplates,
     });
-    console.log(`✓ Created Note Type "${MODEL_NAME}"`);
+    console.log(`Created note type "${MODEL_NAME}"`);
   } else {
     try {
       await ankiConnect("updateModelTemplates", {
@@ -159,20 +160,12 @@ async function syncCard(
   const cur = existing.fields;
   const diffs: string[] = [];
 
-  if (cur.FrontEn?.value !== fields.FrontEn) {
-    diffs.push(`FrontEn: "${cur.FrontEn?.value ?? ""}" -> "${fields.FrontEn}"`);
-  }
-  if (cur.FrontSentence?.value !== fields.FrontSentence) {
-    diffs.push(`FrontSentence: "${cur.FrontSentence?.value ?? ""}" -> "${fields.FrontSentence}"`);
-  }
-  if (cur.BackDe?.value !== fields.BackDe) {
-    diffs.push(`BackDe: "${cur.BackDe?.value ?? ""}" -> "${fields.BackDe}"`);
-  }
-  if (cur.BackSentence?.value !== fields.BackSentence) {
-    diffs.push(`BackSentence: "${cur.BackSentence?.value ?? ""}" -> "${fields.BackSentence}"`);
-  }
-  if (cur.Notes?.value !== fields.Notes) {
-    diffs.push(`Notes: "${cur.Notes?.value ?? ""}" -> "${fields.Notes}"`);
+  for (const [key, value] of Object.entries(fields)) {
+    if (key === "UID") continue;
+    const currentVal = cur[key]?.value ?? "";
+    if (currentVal !== value) {
+      diffs.push(`${key}: "${currentVal}" -> "${value}"`);
+    }
   }
 
   if (diffs.length > 0) {
@@ -194,11 +187,11 @@ async function loadModule(file: string): Promise<{ deckName: string; cards: Norm
   const data = mod.default || mod;
   const deckName = (typeof data.deck === "string" ? data.deck : mod.deck) || "Deutsch";
 
-  const groups: Array<[string | undefined, any[]]> = Array.isArray(data)
+  const groups: Array<[string | undefined, VocabItem[]]> = Array.isArray(data)
     ? [[undefined, data]]
     : Object.entries({ ...mod, ...data })
         .filter(([k, v]) => k !== "deck" && k !== "default" && Array.isArray(v))
-        .map(([k, v]) => [k.endsWith("s") && k.length > 3 ? k.slice(0, -1) : k, v as any[]]);
+        .map(([k, v]) => [k.endsWith("s") && k.length > 3 ? k.slice(0, -1) : k, v as VocabItem[]]);
 
   const cards: NormalizedCard[] = [];
   for (const [tag, items] of groups) {
@@ -211,9 +204,9 @@ async function loadModule(file: string): Promise<{ deckName: string; cards: Norm
 }
 
 async function main() {
-  console.log("⚡ Connecting to AnkiConnect...");
+  console.log("Connecting to AnkiConnect...");
   const version = await ankiConnect("version");
-  console.log(`✓ Connected to AnkiConnect v${version}`);
+  console.log(`Connected to AnkiConnect v${version}`);
 
   await ensureModelExists();
 
@@ -234,19 +227,22 @@ async function main() {
   }
 
   const seenUids = new Map<string, string>(); // uid -> filePath
+  let [totalCreated, totalUpdated, totalUnchanged] = [0, 0, 0];
+  const deckNames = new Set<string>();
 
   for (const file of files) {
     const { deckName, cards } = await loadModule(file);
     await ankiConnect("createDeck", { deck: deckName });
+    deckNames.add(deckName);
 
-    console.log(`\n📂 ${file} -> "${deckName}" (${cards.length} cards)`);
+    console.log(`\n${file} -> "${deckName}" (${cards.length} cards)`);
     let [created, updated, unchanged] = [0, 0, 0];
 
     for (const card of cards) {
       if (seenUids.has(card.uid)) {
-        console.warn(`  ⚠️ Duplicate UID detected: [${card.uid}]`);
-        console.warn(`     First defined in: ${seenUids.get(card.uid)}`);
-        console.warn(`     Skipping duplicate in: ${file}`);
+        console.warn(`  [warn] Duplicate UID detected: [${card.uid}]`);
+        console.warn(`         First defined in: ${seenUids.get(card.uid)}`);
+        console.warn(`         Skipping duplicate in: ${file}`);
         continue;
       }
       seenUids.set(card.uid, file);
@@ -261,24 +257,30 @@ async function main() {
           console.log(`  ~ Updated: ${card.backDe} [${cardLabel(card.uid)}]`);
           if (res.diffs && res.diffs.length > 0) {
             for (const diff of res.diffs) {
-              console.log(`     • ${diff}`);
+              console.log(`     - ${diff}`);
             }
           }
         } else {
           unchanged++;
         }
-      } catch (err: any) {
-        console.error(`  ✕ Error syncing [${card.uid}]: ${err.message}`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`  [error] Error syncing [${card.uid}]: ${msg}`);
       }
     }
 
+    totalCreated += created;
+    totalUpdated += updated;
+    totalUnchanged += unchanged;
     console.log(`  ${created} created | ${updated} updated | ${unchanged} unchanged`);
   }
 
-  console.log("\n✨ Sync complete!");
+  const deckSummary = deckNames.size === 1 ? "1 deck" : `${deckNames.size} decks`;
+  console.log(`\nSync complete: ${totalCreated} created | ${totalUpdated} updated | ${totalUnchanged} unchanged across ${deckSummary}.`);
 }
 
 main().catch((err) => {
-  console.error("\n✕ Sync failed:", err.message);
+  const msg = err instanceof Error ? err.message : String(err);
+  console.error("\nSync failed:", msg);
   process.exit(1);
 });
