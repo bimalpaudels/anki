@@ -1,4 +1,4 @@
-import type { CardEntry, VocabItem } from "./types";
+import type { CardEntry, Tag, VocabItem } from "./types";
 
 const ANKI_CONNECT_URL = process.env.ANKI_CONNECT_URL || "http://127.0.0.1:8765";
 const MODEL_NAME = "GermanCard";
@@ -86,14 +86,15 @@ interface NormalizedCard {
   backDe: string;
   backSentence: string;
   notes: string;
-  tags: string[];
+  tags: Tag[];
 }
 
 const cardLabel = (uid: string) => uid.split("::").slice(1).join("::");
 
-function extractCards(deckName: string, item: VocabItem, categoryTag?: string): NormalizedCard[] {
+function extractCards(deckName: string, item: VocabItem, fileTags: Tag[] = []): NormalizedCard[] {
   const baseId = slugify(item.de);
-  const tags = categoryTag ? [...(item.tags || []), categoryTag] : [...(item.tags || [])];
+  const tagSet = new Set<Tag>([...fileTags, ...(item.tags || [])]);
+  const tags = Array.from(tagSet);
   const entries = item.cards?.length ? item.cards : [""];
 
   return entries.map((entry: CardEntry, index: number) => {
@@ -118,6 +119,7 @@ function extractCards(deckName: string, item: VocabItem, categoryTag?: string): 
 interface ExistingNote {
   id: number;
   fields: Record<string, { value: string; order: number }>;
+  tags: string[];
 }
 
 interface SyncResult {
@@ -141,7 +143,7 @@ async function syncCard(
   const existing = existingMap.get(card.uid);
 
   if (!existing) {
-    const newNoteId = await ankiConnect("addNote", {
+    const newNoteId = await ankiConnect<number>("addNote", {
       note: {
         deckName: card.deck,
         modelName: MODEL_NAME,
@@ -153,29 +155,54 @@ async function syncCard(
     existingMap.set(card.uid, {
       id: newNoteId,
       fields: Object.fromEntries(Object.entries(fields).map(([k, v], i) => [k, { value: v, order: i }])),
+      tags: [...card.tags],
     });
     return { status: "created" };
   }
 
   const cur = existing.fields;
   const diffs: string[] = [];
+  let fieldsChanged = false;
 
   for (const [key, value] of Object.entries(fields)) {
     if (key === "UID") continue;
     const currentVal = cur[key]?.value ?? "";
     if (currentVal !== value) {
       diffs.push(`${key}: "${currentVal}" -> "${value}"`);
+      fieldsChanged = true;
     }
   }
 
+  const existingTags = existing.tags || [];
+  const curTagStr = [...existingTags].sort().join(" ");
+  const newTagStr = [...card.tags].sort().join(" ");
+  const tagsChanged = curTagStr !== newTagStr;
+
+  if (tagsChanged) {
+    diffs.push(`Tags: [${curTagStr}] -> [${newTagStr}]`);
+  }
+
   if (diffs.length > 0) {
-    await ankiConnect("updateNoteFields", { note: { id: existing.id, fields } });
-    if (card.tags.length > 0) {
-      await ankiConnect("addTags", { notes: [existing.id], tags: card.tags.join(" ") });
+    if (fieldsChanged) {
+      await ankiConnect("updateNoteFields", { note: { id: existing.id, fields } });
+      for (const [k, v] of Object.entries(fields)) {
+        if (cur[k]) cur[k].value = v;
+      }
     }
-    for (const [k, v] of Object.entries(fields)) {
-      if (cur[k]) cur[k].value = v;
+
+    if (tagsChanged) {
+      const toRemove = existingTags.filter((t) => !card.tags.includes(t as Tag));
+      const toAdd = card.tags.filter((t) => !existingTags.includes(t));
+
+      if (toRemove.length > 0) {
+        await ankiConnect("removeTags", { notes: [existing.id], tags: toRemove.join(" ") });
+      }
+      if (toAdd.length > 0) {
+        await ankiConnect("addTags", { notes: [existing.id], tags: toAdd.join(" ") });
+      }
+      existing.tags = [...card.tags];
     }
+
     return { status: "updated", diffs };
   }
 
@@ -186,17 +213,23 @@ async function loadModule(file: string): Promise<{ deckName: string; cards: Norm
   const mod = await import(`./data/${file}`);
   const data = mod.default || mod;
   const deckName = (typeof data.deck === "string" ? data.deck : mod.deck) || "Deutsch";
+  const fileTags: Tag[] = Array.isArray(data.tags) ? data.tags : Array.isArray(mod.tags) ? mod.tags : [];
 
-  const groups: Array<[string | undefined, VocabItem[]]> = Array.isArray(data)
-    ? [[undefined, data]]
-    : Object.entries({ ...mod, ...data })
-        .filter(([k, v]) => k !== "deck" && k !== "default" && Array.isArray(v))
-        .map(([k, v]) => [k.endsWith("s") && k.length > 3 ? k.slice(0, -1) : k, v as VocabItem[]]);
+  const items: VocabItem[] = [];
+  if (Array.isArray(data)) {
+    items.push(...data);
+  } else {
+    for (const [k, v] of Object.entries({ ...mod, ...data })) {
+      if (k !== "deck" && k !== "default" && k !== "tags" && Array.isArray(v)) {
+        items.push(...(v as VocabItem[]));
+      }
+    }
+  }
 
   const cards: NormalizedCard[] = [];
-  for (const [tag, items] of groups) {
-    for (const item of items) {
-      if (item?.de && item?.en) cards.push(...extractCards(deckName, item, tag));
+  for (const item of items) {
+    if (item?.de && item?.en) {
+      cards.push(...extractCards(deckName, item, fileTags));
     }
   }
 
@@ -211,12 +244,12 @@ async function main() {
   await ensureModelExists();
 
   // Batch pre-fetch all existing GermanCard notes in 2 requests for instant in-memory sync
-  const allIds: number[] = await ankiConnect("findNotes", { query: `note:${MODEL_NAME}` });
-  const allNotes: any[] = allIds.length > 0 ? await ankiConnect("notesInfo", { notes: allIds }) : [];
+  const allIds = await ankiConnect<number[]>("findNotes", { query: `note:${MODEL_NAME}` });
+  const allNotes = allIds.length > 0 ? await ankiConnect<any[]>("notesInfo", { notes: allIds }) : [];
   const existingMap = new Map<string, ExistingNote>(
     allNotes
       .filter((n) => n?.fields?.UID?.value)
-      .map((n) => [n.fields.UID.value, { id: n.noteId, fields: n.fields }])
+      .map((n) => [n.fields.UID.value, { id: n.noteId, fields: n.fields, tags: n.tags || [] }])
   );
 
   const files = Array.from(new Bun.Glob("*.ts").scanSync("data"));

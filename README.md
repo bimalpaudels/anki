@@ -41,12 +41,16 @@ import type { VocabItem } from "../types";
 
 export const deck = "German::A1::Daily";
 
+// Optional: file-level tags applied to all cards in this file
+export const tags: Tag[] = ["verb"];
+
 // Any export name is supported and automatically tagged (#verb, #phrase, etc.)
 export const verbs: VocabItem[] = [
   {
     de: "essen",
     en: "to eat",
     notes: "du isst | hat gegessen",
+    tags: ["verb"], // Optional item-level tags from strict Tag union
     cards: [
       "Ich [esse] einen Apfel.",
     ],
