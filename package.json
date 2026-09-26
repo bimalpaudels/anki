@@ -1,0 +1,8 @@
+{
+  "name": "anki-sync",
+  "version": "1.0.0",
+  "description": "Idempotent Anki sync script using Bun and TypeScript",
+  "scripts": {
+    "sync": "bun run sync.ts"
+  }
+}
