@@ -295,19 +295,22 @@ async function main() {
         }
       }
 
-      // Check tag differences
+      // Check tag differences (case-insensitive because Anki treats tags as case-insensitive)
       const existingTags = existing.tags || [];
-      const curTagStr = [...existingTags].sort().join(" ");
-      const newTagStr = [...card.tags].sort().join(" ");
+      const curTagSet = new Set(existingTags.map((t) => t.toLowerCase()));
+      const newTagSet = new Set(card.tags.map((t) => t.toLowerCase()));
+
+      const curTagStr = [...curTagSet].sort().join(" ");
+      const newTagStr = [...newTagSet].sort().join(" ");
       const tagsChanged = curTagStr !== newTagStr;
 
       let toRemoveTags: string[] = [];
       let toAddTags: string[] = [];
 
       if (tagsChanged) {
-        diffs.push(`Tags: [${curTagStr}] -> [${newTagStr}]`);
-        toRemoveTags = existingTags.filter((t) => !card.tags.includes(t as Tag));
-        toAddTags = card.tags.filter((t) => !existingTags.includes(t));
+        diffs.push(`Tags: [${[...existingTags].sort().join(" ")}] -> [${[...card.tags].sort().join(" ")}]`);
+        toRemoveTags = existingTags.filter((t) => !newTagSet.has(t.toLowerCase()));
+        toAddTags = card.tags.filter((t) => !curTagSet.has(t.toLowerCase()));
       }
 
       if (diffs.length > 0) {
@@ -448,8 +451,21 @@ async function main() {
   console.log(`\nSync complete: ${totalCreated} created | ${totalUpdated} updated | ${totalUnchanged} unchanged across ${deckSummary}.`);
 }
 
-main().catch((err) => {
-  const msg = err instanceof Error ? err.message : String(err);
-  console.error("\nSync failed:", msg);
-  process.exit(1);
-});
+export {
+  slugify,
+  detectGender,
+  formatBackDe,
+  parseSentence,
+  extractCards,
+  cardLabel,
+  BATCH_SIZE,
+  main,
+};
+
+if (import.meta.main) {
+  main().catch((err) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("\nSync failed:", msg);
+    process.exit(1);
+  });
+}
