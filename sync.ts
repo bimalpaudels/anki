@@ -3,6 +3,7 @@ import type { CardEntry, Tag, VocabItem } from "./types";
 const ANKI_CONNECT_URL = Bun.env.ANKI_CONNECT_URL || "http://127.0.0.1:8765";
 const MODEL_NAME = "GermanCard";
 const MODEL_FIELDS = ["UID", "FrontEn", "FrontSentence", "BackDe", "BackSentence", "Notes"];
+const BATCH_SIZE = 100;
 
 interface NormalizedCard {
   uid: string;
@@ -21,9 +22,22 @@ interface ExistingNote {
   tags: string[];
 }
 
-interface SyncResult {
-  status: "created" | "updated" | "unchanged";
+interface CardPlan {
+  card: NormalizedCard;
+  fields: Record<string, string>;
+  status: "created" | "updated" | "unchanged" | "skipped";
   diffs?: string[];
+  existingNote?: ExistingNote;
+  fieldsChanged?: boolean;
+  toRemoveTags?: string[];
+  toAddTags?: string[];
+  error?: string;
+}
+
+interface LoadedFile {
+  file: string;
+  deckName: string;
+  cards: NormalizedCard[];
 }
 
 const cardLabel = (uid: string) => uid.split("::").slice(1).join("::");
@@ -63,20 +77,42 @@ async function ensureModelExists() {
     console.log(`Created note type "${MODEL_NAME}"`);
   } else {
     try {
-      await ankiConnect("updateModelTemplates", {
-        model: {
-          name: MODEL_NAME,
-          templates: {
-            "German Card": {
-              Front: cardTemplates[0].Front,
-              Back: cardTemplates[0].Back,
+      // Check if templates or styling have actually changed before issuing updates
+      const currentTemplates = await ankiConnect<Record<string, { Front: string; Back: string }>>("modelTemplates", {
+        modelName: MODEL_NAME,
+      });
+      const currentStyling = await ankiConnect<{ css: string }>("modelStyling", {
+        modelName: MODEL_NAME,
+      });
+
+      const templateNeedsUpdate =
+        !currentTemplates["German Card"] ||
+        currentTemplates["German Card"].Front.trim() !== cardTemplates[0].Front ||
+        currentTemplates["German Card"].Back.trim() !== cardTemplates[0].Back;
+
+      const stylingNeedsUpdate = currentStyling.css.trim() !== css.trim();
+
+      if (templateNeedsUpdate) {
+        await ankiConnect("updateModelTemplates", {
+          model: {
+            name: MODEL_NAME,
+            templates: {
+              "German Card": {
+                Front: cardTemplates[0].Front,
+                Back: cardTemplates[0].Back,
+              },
             },
           },
-        },
-      });
-      await ankiConnect("updateModelStyling", {
-        model: { name: MODEL_NAME, css },
-      });
+        });
+        console.log(`Updated model templates for "${MODEL_NAME}"`);
+      }
+
+      if (stylingNeedsUpdate) {
+        await ankiConnect("updateModelStyling", {
+          model: { name: MODEL_NAME, css },
+        });
+        console.log(`Updated model styling for "${MODEL_NAME}"`);
+      }
     } catch {}
   }
 }
@@ -125,88 +161,6 @@ function extractCards(deckName: string, item: VocabItem, fileTags: Tag[] = []): 
       tags,
     };
   });
-}
-
-async function syncCard(
-  card: NormalizedCard,
-  existingMap: Map<string, ExistingNote>
-): Promise<SyncResult> {
-  const fields = {
-    UID: card.uid,
-    FrontEn: card.frontEn,
-    FrontSentence: card.frontSentence,
-    BackDe: card.backDe,
-    BackSentence: card.backSentence,
-    Notes: card.notes,
-  };
-
-  const existing = existingMap.get(card.uid);
-
-  if (!existing) {
-    const newNoteId = await ankiConnect<number>("addNote", {
-      note: {
-        deckName: card.deck,
-        modelName: MODEL_NAME,
-        fields,
-        tags: card.tags,
-        options: { allowDuplicate: false, duplicateScope: "deck" },
-      },
-    });
-    existingMap.set(card.uid, {
-      id: newNoteId,
-      fields: Object.fromEntries(Object.entries(fields).map(([k, v], i) => [k, { value: v, order: i }])),
-      tags: [...card.tags],
-    });
-    return { status: "created" };
-  }
-
-  const cur = existing.fields;
-  const diffs: string[] = [];
-  let fieldsChanged = false;
-
-  for (const [key, value] of Object.entries(fields)) {
-    if (key === "UID") continue;
-    const currentVal = cur[key]?.value ?? "";
-    if (currentVal !== value) {
-      diffs.push(`${key}: "${currentVal}" -> "${value}"`);
-      fieldsChanged = true;
-    }
-  }
-
-  const existingTags = existing.tags || [];
-  const curTagStr = [...existingTags].sort().join(" ");
-  const newTagStr = [...card.tags].sort().join(" ");
-  const tagsChanged = curTagStr !== newTagStr;
-
-  if (tagsChanged) {
-    diffs.push(`Tags: [${curTagStr}] -> [${newTagStr}]`);
-  }
-
-  if (diffs.length > 0) {
-    if (fieldsChanged) {
-      await ankiConnect("updateNoteFields", { note: { id: existing.id, fields } });
-      for (const [k, v] of Object.entries(fields)) {
-        if (cur[k]) cur[k].value = v;
-      }
-    }
-
-    if (tagsChanged) {
-      const toRemove = existingTags.filter((t) => !card.tags.includes(t as Tag));
-      const toAdd = card.tags.filter((t) => !existingTags.includes(t));
-
-      if (toRemove.length > 0) {
-        await ankiConnect("removeTags", { notes: [existing.id], tags: toRemove.join(" ") });
-      }
-      if (toAdd.length > 0) {
-        await ankiConnect("addTags", { notes: [existing.id], tags: toAdd.join(" ") });
-      }
-      existing.tags = [...card.tags];
-    }
-
-    return { status: "updated", diffs };
-  }
-
-  return { status: "unchanged" };
 }
 
 async function loadModule(file: string): Promise<{ deckName: string; cards: NormalizedCard[] }> {
@@ -259,46 +213,211 @@ async function main() {
     return;
   }
 
+  // Asynchronously load all files concurrently
+  const loadedFiles: LoadedFile[] = await Promise.all(
+    files.map(async (file) => {
+      const { deckName, cards } = await loadModule(file);
+      return { file, deckName, cards };
+    })
+  );
+
+  // Batch deck creation: ensure unique decks exist once upfront
+  const uniqueDecks = Array.from(new Set(loadedFiles.map((f) => f.deckName)));
+  for (const deck of uniqueDecks) {
+    await ankiConnect("createDeck", { deck });
+  }
+
   const seenUids = new Map<string, string>(); // uid -> filePath
-  let [totalCreated, totalUpdated, totalUnchanged] = [0, 0, 0];
-  const deckNames = new Set<string>();
+  const filePlans = new Map<string, CardPlan[]>();
+  const toCreate: CardPlan[] = [];
+  const toUpdate: CardPlan[] = [];
 
-  for (const file of files) {
-    const { deckName, cards } = await loadModule(file);
-    await ankiConnect("createDeck", { deck: deckName });
-    deckNames.add(deckName);
-
-    console.log(`\n${file} -> "${deckName}" (${cards.length} cards)`);
-    let [created, updated, unchanged] = [0, 0, 0];
+  // In-memory reconciliation and diff planning across all cards
+  for (const { file, cards } of loadedFiles) {
+    const plans: CardPlan[] = [];
 
     for (const card of cards) {
       if (seenUids.has(card.uid)) {
         console.warn(`  [warn] Duplicate UID detected: [${card.uid}]`);
         console.warn(`         First defined in: ${seenUids.get(card.uid)}`);
         console.warn(`         Skipping duplicate in: ${file}`);
+        plans.push({ card, fields: {}, status: "skipped" });
         continue;
       }
       seenUids.set(card.uid, file);
 
+      const fields: Record<string, string> = {
+        UID: card.uid,
+        FrontEn: card.frontEn,
+        FrontSentence: card.frontSentence,
+        BackDe: card.backDe,
+        BackSentence: card.backSentence,
+        Notes: card.notes,
+      };
+
+      const existing = existingMap.get(card.uid);
+
+      if (!existing) {
+        const plan: CardPlan = { card, fields, status: "created" };
+        plans.push(plan);
+        toCreate.push(plan);
+        continue;
+      }
+
+      // Check fields differences
+      const cur = existing.fields;
+      const diffs: string[] = [];
+      let fieldsChanged = false;
+
+      for (const [key, value] of Object.entries(fields)) {
+        if (key === "UID") continue;
+        const currentVal = cur[key]?.value ?? "";
+        if (currentVal !== value) {
+          diffs.push(`${key}: "${currentVal}" -> "${value}"`);
+          fieldsChanged = true;
+        }
+      }
+
+      // Check tag differences
+      const existingTags = existing.tags || [];
+      const curTagStr = [...existingTags].sort().join(" ");
+      const newTagStr = [...card.tags].sort().join(" ");
+      const tagsChanged = curTagStr !== newTagStr;
+
+      let toRemoveTags: string[] = [];
+      let toAddTags: string[] = [];
+
+      if (tagsChanged) {
+        diffs.push(`Tags: [${curTagStr}] -> [${newTagStr}]`);
+        toRemoveTags = existingTags.filter((t) => !card.tags.includes(t as Tag));
+        toAddTags = card.tags.filter((t) => !existingTags.includes(t));
+      }
+
+      if (diffs.length > 0) {
+        const plan: CardPlan = {
+          card,
+          fields,
+          status: "updated",
+          diffs,
+          existingNote: existing,
+          fieldsChanged,
+          toRemoveTags,
+          toAddTags,
+        };
+        plans.push(plan);
+        toUpdate.push(plan);
+      } else {
+        plans.push({ card, fields, status: "unchanged" });
+      }
+    }
+
+    filePlans.set(file, plans);
+  }
+
+  // 1. Batch creation with addNotes
+  if (toCreate.length > 0) {
+    for (let i = 0; i < toCreate.length; i += BATCH_SIZE) {
+      const chunk = toCreate.slice(i, i + BATCH_SIZE);
+      const notePayloads = chunk.map((plan) => ({
+        deckName: plan.card.deck,
+        modelName: MODEL_NAME,
+        fields: plan.fields,
+        tags: plan.card.tags,
+        options: { allowDuplicate: false, duplicateScope: "deck" },
+      }));
+
       try {
-        const res = await syncCard(card, existingMap);
-        if (res.status === "created") {
-          created++;
-          console.log(`  + Created: ${card.backDe} [${cardLabel(card.uid)}]`);
-        } else if (res.status === "updated") {
-          updated++;
-          console.log(`  ~ Updated: ${card.backDe} [${cardLabel(card.uid)}]`);
-          if (res.diffs && res.diffs.length > 0) {
-            for (const diff of res.diffs) {
-              console.log(`     - ${diff}`);
-            }
+        const newIds = await ankiConnect<(number | null)[]>("addNotes", { notes: notePayloads });
+        for (let j = 0; j < chunk.length; j++) {
+          const id = newIds[j];
+          const plan = chunk[j];
+          if (id) {
+            existingMap.set(plan.card.uid, {
+              id,
+              fields: Object.fromEntries(Object.entries(plan.fields).map(([k, v], idx) => [k, { value: v, order: idx }])),
+              tags: [...plan.card.tags],
+            });
+          } else {
+            plan.error = "AnkiConnect rejected card creation (possible duplicate in deck).";
           }
-        } else {
-          unchanged++;
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.error(`  [error] Error syncing [${card.uid}]: ${msg}`);
+        for (const plan of chunk) {
+          plan.error = msg;
+        }
+      }
+    }
+  }
+
+  // 2. Batch updates with AnkiConnect multi action
+  if (toUpdate.length > 0) {
+    const updateActions: { action: string; params: Record<string, unknown> }[] = [];
+    for (const plan of toUpdate) {
+      if (!plan.existingNote) continue;
+      const noteId = plan.existingNote.id;
+
+      if (plan.fieldsChanged) {
+        updateActions.push({
+          action: "updateNoteFields",
+          params: { note: { id: noteId, fields: plan.fields } },
+        });
+      }
+
+      if (plan.toRemoveTags && plan.toRemoveTags.length > 0) {
+        updateActions.push({
+          action: "removeTags",
+          params: { notes: [noteId], tags: plan.toRemoveTags.join(" ") },
+        });
+      }
+
+      if (plan.toAddTags && plan.toAddTags.length > 0) {
+        updateActions.push({
+          action: "addTags",
+          params: { notes: [noteId], tags: plan.toAddTags.join(" ") },
+        });
+      }
+    }
+
+    for (let i = 0; i < updateActions.length; i += BATCH_SIZE) {
+      const chunk = updateActions.slice(i, i + BATCH_SIZE);
+      try {
+        await ankiConnect("multi", { actions: chunk });
+      } catch (err) {
+        console.error(`  [error] Batch update failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+
+  // 3. Print clean summary per file
+  let [totalCreated, totalUpdated, totalUnchanged] = [0, 0, 0];
+
+  for (const { file, deckName, cards } of loadedFiles) {
+    console.log(`\n${file} -> "${deckName}" (${cards.length} cards)`);
+    const plans = filePlans.get(file) || [];
+    let [created, updated, unchanged] = [0, 0, 0];
+
+    for (const plan of plans) {
+      if (plan.status === "skipped") continue;
+
+      if (plan.error) {
+        console.error(`  [error] Error syncing [${plan.card.uid}]: ${plan.error}`);
+        continue;
+      }
+
+      if (plan.status === "created") {
+        created++;
+        console.log(`  + Created: ${plan.card.backDe} [${cardLabel(plan.card.uid)}]`);
+      } else if (plan.status === "updated") {
+        updated++;
+        console.log(`  ~ Updated: ${plan.card.backDe} [${cardLabel(plan.card.uid)}]`);
+        if (plan.diffs && plan.diffs.length > 0) {
+          for (const diff of plan.diffs) {
+            console.log(`     - ${diff}`);
+          }
+        }
+      } else {
+        unchanged++;
       }
     }
 
@@ -308,7 +427,7 @@ async function main() {
     console.log(`  ${created} created | ${updated} updated | ${unchanged} unchanged`);
   }
 
-  const deckSummary = deckNames.size === 1 ? "1 deck" : `${deckNames.size} decks`;
+  const deckSummary = uniqueDecks.length === 1 ? "1 deck" : `${uniqueDecks.length} decks`;
   console.log(`\nSync complete: ${totalCreated} created | ${totalUpdated} updated | ${totalUnchanged} unchanged across ${deckSummary}.`);
 }
 
