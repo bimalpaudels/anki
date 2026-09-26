@@ -172,4 +172,33 @@ describe("Stress Test: High-Volume In-Memory Card Processing", () => {
     expect(duration).toBeLessThan(100); // 5000 cards normalized in under 100ms
     console.log(`\n  ⚡ Processed 5,000 cards in ${duration.toFixed(2)}ms (${(5000 / (duration / 1000)).toFixed(0)} cards/sec)`);
   });
+
+  it("parallelizes 24,000 cards across concurrent async chunks", async () => {
+    const CONCURRENCY = 8;
+    const ITEMS_PER_WORKER = 1500; // 1,500 items * 2 sentences = 3,000 cards per worker
+    const TOTAL_CARDS = CONCURRENCY * ITEMS_PER_WORKER * 2; // 24,000 cards
+
+    const start = performance.now();
+    const tasks = Array.from({ length: CONCURRENCY }, (_, workerIdx) => {
+      return new Promise<number>((resolve) => {
+        const localItems: VocabItem[] = [];
+        for (let i = 0; i < ITEMS_PER_WORKER; i++) {
+          localItems.push({
+            de: `der ParallelItem_${workerIdx}_${i}`,
+            en: `parallel object ${i}`,
+            cards: [`Sentence [ParallelItem_${workerIdx}_${i}] 1`, `Sentence [ParallelItem_${workerIdx}_${i}] 2`],
+          });
+        }
+        const normalized = localItems.flatMap((item) => extractCards(`Deck_${workerIdx}`, item));
+        resolve(normalized.length);
+      });
+    });
+
+    const results = await Promise.all(tasks);
+    const totalProcessed = results.reduce((a, b) => a + b, 0);
+    const duration = performance.now() - start;
+
+    expect(totalProcessed).toBe(TOTAL_CARDS);
+    console.log(`  🚀 Parallel processed ${totalProcessed.toLocaleString()} cards across ${CONCURRENCY} concurrent workers in ${duration.toFixed(2)}ms (${((totalProcessed / duration) * 1000).toFixed(0)} cards/sec)`);
+  });
 });
