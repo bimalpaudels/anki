@@ -7,8 +7,3 @@ export interface VocabItem {
   tags?: string[];
   cards?: CardEntry[];
 }
-
-export interface DeckModule {
-  deck?: string;
-  [category: string]: any;
-}

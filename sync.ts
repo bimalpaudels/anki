@@ -1,7 +1,7 @@
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { CardEntry, DeckModule, VocabItem } from "./types";
+import type { CardEntry, VocabItem } from "./types";
 
 const ANKI_CONNECT_URL = process.env.ANKI_CONNECT_URL || "http://127.0.0.1:8765";
 const MODEL_NAME = "GermanCard";
@@ -144,46 +144,35 @@ interface NormalizedCard {
   tags: string[];
 }
 
+const cardLabel = (uid: string) => uid.split("::").slice(1).join("::");
+
 function extractCards(deckName: string, item: VocabItem, categoryTag?: string): NormalizedCard[] {
   const baseId = slugify(item.de);
-  const tags = [...(item.tags || [])];
-  if (categoryTag && !tags.includes(categoryTag)) tags.push(categoryTag);
+  const tags = categoryTag ? [...(item.tags || []), categoryTag] : [...(item.tags || [])];
+  const entries = item.cards?.length ? item.cards : [""];
 
-  // If cards are omitted or empty, generate a single base card at slot 0
-  if (!item.cards || item.cards.length === 0) {
-    return [
-      {
-        uid: `${deckName}::${baseId}::0`,
-        deck: deckName,
-        frontEn: item.en,
-        frontSentence: "",
-        backDe: item.de,
-        backSentence: "",
-        notes: item.notes || "",
-        tags,
-      },
-    ];
-  }
-
-  return item.cards.map((entry: CardEntry, index: number) => {
+  return entries.map((entry: CardEntry, index: number) => {
     const isString = typeof entry === "string";
-    const subId = String(index);
     const sentence = isString ? entry : entry.sentence;
     const cardNotes = isString ? "" : (entry.notes || "");
-    const combinedNotes = [item.notes, cardNotes].filter(Boolean).join(" | ");
     const { frontSentence, backSentence } = parseSentence(sentence);
 
     return {
-      uid: `${deckName}::${baseId}::${subId}`,
+      uid: `${deckName}::${baseId}::${index}`,
       deck: deckName,
       frontEn: item.en,
       frontSentence,
       backDe: item.de,
       backSentence,
-      notes: combinedNotes,
+      notes: [item.notes, cardNotes].filter(Boolean).join(" | "),
       tags,
     };
   });
+}
+
+interface ExistingNote {
+  id: number;
+  fields: Record<string, { value: string; order: number }>;
 }
 
 interface SyncResult {
@@ -191,11 +180,10 @@ interface SyncResult {
   diffs?: string[];
 }
 
-async function syncCard(card: NormalizedCard): Promise<SyncResult> {
-  const existing: number[] = await ankiConnect("findNotes", {
-    query: `note:${MODEL_NAME} "UID:${card.uid}"`,
-  });
-
+async function syncCard(
+  card: NormalizedCard,
+  existingMap: Map<string, ExistingNote>
+): Promise<SyncResult> {
   const fields = {
     UID: card.uid,
     FrontEn: card.frontEn,
@@ -205,8 +193,10 @@ async function syncCard(card: NormalizedCard): Promise<SyncResult> {
     Notes: card.notes,
   };
 
-  if (existing.length === 0) {
-    await ankiConnect("addNote", {
+  const existing = existingMap.get(card.uid);
+
+  if (!existing) {
+    const newNoteId = await ankiConnect("addNote", {
       note: {
         deckName: card.deck,
         modelName: MODEL_NAME,
@@ -215,36 +205,39 @@ async function syncCard(card: NormalizedCard): Promise<SyncResult> {
         options: { allowDuplicate: false, duplicateScope: "deck" },
       },
     });
+    existingMap.set(card.uid, {
+      id: newNoteId,
+      fields: Object.fromEntries(Object.entries(fields).map(([k, v], i) => [k, { value: v, order: i }])),
+    });
     return { status: "created" };
   }
 
-  const noteId = existing[0];
-  const info = await ankiConnect("notesInfo", { notes: [noteId] });
-  if (!info || info.length === 0) return { status: "unchanged" };
-
-  const cur = info[0].fields;
+  const cur = existing.fields;
   const diffs: string[] = [];
 
-  if (cur.FrontEn.value !== fields.FrontEn) {
-    diffs.push(`FrontEn: "${cur.FrontEn.value}" -> "${fields.FrontEn}"`);
+  if (cur.FrontEn?.value !== fields.FrontEn) {
+    diffs.push(`FrontEn: "${cur.FrontEn?.value ?? ""}" -> "${fields.FrontEn}"`);
   }
-  if (cur.FrontSentence.value !== fields.FrontSentence) {
-    diffs.push(`FrontSentence: "${cur.FrontSentence.value}" -> "${fields.FrontSentence}"`);
+  if (cur.FrontSentence?.value !== fields.FrontSentence) {
+    diffs.push(`FrontSentence: "${cur.FrontSentence?.value ?? ""}" -> "${fields.FrontSentence}"`);
   }
-  if (cur.BackDe.value !== fields.BackDe) {
-    diffs.push(`BackDe: "${cur.BackDe.value}" -> "${fields.BackDe}"`);
+  if (cur.BackDe?.value !== fields.BackDe) {
+    diffs.push(`BackDe: "${cur.BackDe?.value ?? ""}" -> "${fields.BackDe}"`);
   }
-  if (cur.BackSentence.value !== fields.BackSentence) {
-    diffs.push(`BackSentence: "${cur.BackSentence.value}" -> "${fields.BackSentence}"`);
+  if (cur.BackSentence?.value !== fields.BackSentence) {
+    diffs.push(`BackSentence: "${cur.BackSentence?.value ?? ""}" -> "${fields.BackSentence}"`);
   }
-  if (cur.Notes.value !== fields.Notes) {
-    diffs.push(`Notes: "${cur.Notes.value}" -> "${fields.Notes}"`);
+  if (cur.Notes?.value !== fields.Notes) {
+    diffs.push(`Notes: "${cur.Notes?.value ?? ""}" -> "${fields.Notes}"`);
   }
 
   if (diffs.length > 0) {
-    await ankiConnect("updateNoteFields", { note: { id: noteId, fields } });
+    await ankiConnect("updateNoteFields", { note: { id: existing.id, fields } });
     if (card.tags.length > 0) {
-      await ankiConnect("addTags", { notes: [noteId], tags: card.tags.join(" ") });
+      await ankiConnect("addTags", { notes: [existing.id], tags: card.tags.join(" ") });
+    }
+    for (const [k, v] of Object.entries(fields)) {
+      if (cur[k]) cur[k].value = v;
     }
     return { status: "updated", diffs };
   }
@@ -256,30 +249,17 @@ async function loadModule(filePath: string): Promise<{ deckName: string; cards: 
   const mod = await import(pathToFileURL(filePath).href);
   const data = mod.default || mod;
   const deckName = (typeof data.deck === "string" ? data.deck : mod.deck) || "Deutsch";
+
+  const groups: Array<[string | undefined, any[]]> = Array.isArray(data)
+    ? [[undefined, data]]
+    : Object.entries({ ...mod, ...data })
+        .filter(([k, v]) => k !== "deck" && k !== "default" && Array.isArray(v))
+        .map(([k, v]) => [k.endsWith("s") && k.length > 3 ? k.slice(0, -1) : k, v as any[]]);
+
   const cards: NormalizedCard[] = [];
-
-  // Case 1: File exports an array directly (e.g. export default [...])
-  if (Array.isArray(data)) {
-    for (const item of data) {
-      if (item && item.de && item.en) {
-        cards.push(...extractCards(deckName, item));
-      }
-    }
-    return { deckName, cards };
-  }
-
-  // Case 2: Named exports or object keys (e.g. export const phrases = [...], export const food = [...])
-  const combined = { ...mod, ...(typeof data === "object" ? data : {}) };
-  for (const [key, value] of Object.entries(combined)) {
-    if (key === "deck" || key === "default" || !Array.isArray(value)) continue;
-
-    // Auto-tag with singularized key name (e.g. "nouns" -> "noun", "verbs" -> "verb", "slang" -> "slang")
-    const tag = key.endsWith("s") && key.length > 3 ? key.slice(0, -1) : key;
-
-    for (const item of value) {
-      if (item && item.de && item.en) {
-        cards.push(...extractCards(deckName, item, tag));
-      }
+  for (const [tag, items] of groups) {
+    for (const item of items) {
+      if (item?.de && item?.en) cards.push(...extractCards(deckName, item, tag));
     }
   }
 
@@ -292,6 +272,15 @@ async function main() {
   console.log(`✓ Connected to AnkiConnect v${version}`);
 
   await ensureModelExists();
+
+  // Batch pre-fetch all existing GermanCard notes in 2 requests for instant in-memory sync
+  const allIds: number[] = await ankiConnect("findNotes", { query: `note:${MODEL_NAME}` });
+  const allNotes: any[] = allIds.length > 0 ? await ankiConnect("notesInfo", { notes: allIds }) : [];
+  const existingMap = new Map<string, ExistingNote>(
+    allNotes
+      .filter((n) => n?.fields?.UID?.value)
+      .map((n) => [n.fields.UID.value, { id: n.noteId, fields: n.fields }])
+  );
 
   const dataDir = join(process.cwd(), "data");
   const files = (await readdir(dataDir)).filter((f) => f.endsWith(".ts"));
@@ -321,13 +310,13 @@ async function main() {
       seenUids.set(card.uid, file);
 
       try {
-        const res = await syncCard(card);
+        const res = await syncCard(card, existingMap);
         if (res.status === "created") {
           created++;
-          console.log(`  + Created: ${card.backDe} [${card.uid.split("::").slice(1).join("::")}]`);
+          console.log(`  + Created: ${card.backDe} [${cardLabel(card.uid)}]`);
         } else if (res.status === "updated") {
           updated++;
-          console.log(`  ~ Updated: ${card.backDe} [${card.uid.split("::").slice(1).join("::")}]`);
+          console.log(`  ~ Updated: ${card.backDe} [${cardLabel(card.uid)}]`);
           if (res.diffs && res.diffs.length > 0) {
             for (const diff of res.diffs) {
               console.log(`     • ${diff}`);
