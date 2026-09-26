@@ -1,15 +1,15 @@
 import type { VocabItem } from "../types";
 
-export const deck = "deutsch";
+export const deck = "Deutsch";
 
 export const nouns: VocabItem[] = [
   {
-    de: "der Kaffee",
-    en: "the coffee",
-    notes: "Masculine: der Kaffee",
+    de: "der Pullover",
+    en: "the sweater",
+    notes: "Nouns ending in -er are typically masculine | Plural: die Pullover",
     tags: ["noun"],
     cards: [
-      "Möchtest du eine Tasse [Kaffee]?",
+      "Zieh einen warmen [Pullover] an.",
     ],
   },
 ];
@@ -18,7 +18,7 @@ export const verbs: VocabItem[] = [
   {
     de: "essen",
     en: "to eat",
-    notes: "irregular: du isst, er isst | Perfekt: hat gegessen",
+    notes: "aß | hat gegessen",
     tags: ["verb"],
     cards: [
       "Ich [esse] einen Apfel.",
@@ -30,6 +30,7 @@ export const adjectives: VocabItem[] = [
   {
     de: "schnell",
     en: "fast / quick",
+    notes: "schneller | am schnellsten",
     tags: ["adjective"],
     cards: [
       "Er fährt sehr [schnell].",
