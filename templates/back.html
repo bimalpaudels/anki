@@ -1,25 +1,12 @@
 <div>{{FrontEn}}</div>
 {{#FrontSentence}}
-<br>
 <div>{{FrontSentence}}</div>
 {{/FrontSentence}}
 <hr id="answer">
-<div id="de-text" style="font-size: 1.2em; font-weight: bold;">{{BackDe}}</div>
+<div class="de">{{BackDe}}</div>
 {{#BackSentence}}
-<br>
 <div>{{BackSentence}}</div>
 {{/BackSentence}}
 {{#Notes}}
-<br>
-<div style="font-size: 0.85em; color: gray;">{{Notes}}</div>
+<div class="notes">{{Notes}}</div>
 {{/Notes}}
-<script>
-(function() {
-  var el = document.getElementById("de-text");
-  if (!el) return;
-  var txt = el.innerText.trim();
-  if (txt.startsWith("der ") || txt.startsWith("der/")) el.classList.add("gender-der");
-  else if (txt.startsWith("die ") || txt.startsWith("die/")) el.classList.add("gender-die");
-  else if (txt.startsWith("das ") || txt.startsWith("das/")) el.classList.add("gender-das");
-})();
-</script>

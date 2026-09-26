@@ -1,15 +1,43 @@
 .card {
-  font-family: arial;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   font-size: 20px;
   text-align: center;
-  color: black;
-  background-color: white;
+  line-height: 1.5;
+  max-width: 520px;
+  margin: 0 auto;
 }
 
-.gender-der { color: #2563eb !important; }
-.gender-die { color: #dc2626 !important; }
-.gender-das { color: #16a34a !important; }
+.card div {
+  margin: 8px 0;
+}
 
-.nightMode .gender-der { color: #89b4fa !important; }
-.nightMode .gender-die { color: #f38ba8 !important; }
-.nightMode .gender-das { color: #a6e3a1 !important; }
+.de {
+  font-size: 1.4em;
+  font-weight: bold;
+}
+
+.notes {
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+
+/* Cloze */
+.cloze-blank {
+  display: inline-block;
+  min-width: 48px;
+  border-bottom: 2px solid currentColor;
+}
+
+.cloze-answer {
+  font-weight: bold;
+  text-decoration: underline;
+}
+
+/* Gender Accents */
+.gender-der { color: #2563eb; }
+.gender-die { color: #dc2626; }
+.gender-das { color: #16a34a; }
+
+.nightMode .gender-der { color: #89b4fa; }
+.nightMode .gender-die { color: #f38ba8; }
+.nightMode .gender-das { color: #a6e3a1; }

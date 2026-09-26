@@ -10,6 +10,7 @@ interface NormalizedCard {
   deck: string;
   frontEn: string;
   frontSentence: string;
+  rawDe: string;
   backDe: string;
   backSentence: string;
   notes: string;
@@ -128,13 +129,27 @@ function slugify(text: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+function detectGender(de: string): "der" | "die" | "das" | null {
+  const t = de.trim().toLowerCase();
+  if (t.startsWith("der ") || t.startsWith("der/")) return "der";
+  if (t.startsWith("die ") || t.startsWith("die/")) return "die";
+  if (t.startsWith("das ") || t.startsWith("das/")) return "das";
+  return null;
+}
+
+function formatBackDe(de: string): string {
+  const gender = detectGender(de);
+  if (!gender) return de;
+  return `<span class="gender-${gender}">${de}</span>`;
+}
+
 function parseSentence(raw?: string): { frontSentence: string; backSentence: string } {
   if (!raw) return { frontSentence: "", backSentence: "" };
   const trimmed = raw.trim();
   if (!trimmed.includes("[")) return { frontSentence: trimmed, backSentence: trimmed };
   return {
-    frontSentence: trimmed.replace(/\[(.*?)\]/g, "<u>_____</u>"),
-    backSentence: trimmed.replace(/\[(.*?)\]/g, "<u><b>$1</b></u>"),
+    frontSentence: trimmed.replace(/\[(.*?)\]/g, '<span class="cloze-blank"></span>'),
+    backSentence: trimmed.replace(/\[(.*?)\]/g, '<span class="cloze-answer">$1</span>'),
   };
 }
 
@@ -143,6 +158,7 @@ function extractCards(deckName: string, item: VocabItem, fileTags: Tag[] = []): 
   const tagSet = new Set<Tag>([...fileTags, ...(item.tags || [])]);
   const tags = Array.from(tagSet);
   const entries = item.cards?.length ? item.cards : [""];
+  const formattedDe = formatBackDe(item.de);
 
   return entries.map((entry: CardEntry, index: number) => {
     const isString = typeof entry === "string";
@@ -155,7 +171,8 @@ function extractCards(deckName: string, item: VocabItem, fileTags: Tag[] = []): 
       deck: deckName,
       frontEn: item.en,
       frontSentence,
-      backDe: item.de,
+      rawDe: item.de,
+      backDe: formattedDe,
       backSentence,
       notes: [item.notes, cardNotes].filter(Boolean).join(" | "),
       tags,
@@ -407,10 +424,10 @@ async function main() {
 
       if (plan.status === "created") {
         created++;
-        console.log(`  + Created: ${plan.card.backDe} [${cardLabel(plan.card.uid)}]`);
+        console.log(`  + Created: ${plan.card.rawDe} [${cardLabel(plan.card.uid)}]`);
       } else if (plan.status === "updated") {
         updated++;
-        console.log(`  ~ Updated: ${plan.card.backDe} [${cardLabel(plan.card.uid)}]`);
+        console.log(`  ~ Updated: ${plan.card.rawDe} [${cardLabel(plan.card.uid)}]`);
         if (plan.diffs && plan.diffs.length > 0) {
           for (const diff of plan.diffs) {
             console.log(`     - ${diff}`);
