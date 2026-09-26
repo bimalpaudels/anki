@@ -4,64 +4,6 @@ const ANKI_CONNECT_URL = process.env.ANKI_CONNECT_URL || "http://127.0.0.1:8765"
 const MODEL_NAME = "GermanCard";
 const MODEL_FIELDS = ["UID", "FrontEn", "FrontSentence", "BackDe", "BackSentence", "Notes"];
 
-const CARD_CSS = `
-.card {
-  font-family: arial;
-  font-size: 20px;
-  text-align: center;
-  color: black;
-  background-color: white;
-}
-
-.gender-der { color: #2563eb !important; }
-.gender-die { color: #dc2626 !important; }
-.gender-das { color: #16a34a !important; }
-
-.nightMode .gender-der { color: #89b4fa !important; }
-.nightMode .gender-die { color: #f38ba8 !important; }
-.nightMode .gender-das { color: #a6e3a1 !important; }
-`;
-
-const CARD_TEMPLATES = [
-  {
-    Name: "German Card",
-    Front: `
-<div>{{FrontEn}}</div>
-{{#FrontSentence}}
-<br>
-<div>{{FrontSentence}}</div>
-{{/FrontSentence}}
-    `.trim(),
-    Back: `
-<div>{{FrontEn}}</div>
-{{#FrontSentence}}
-<br>
-<div>{{FrontSentence}}</div>
-{{/FrontSentence}}
-<hr id="answer">
-<div id="de-text" style="font-size: 1.2em; font-weight: bold;">{{BackDe}}</div>
-{{#BackSentence}}
-<br>
-<div>{{BackSentence}}</div>
-{{/BackSentence}}
-{{#Notes}}
-<br>
-<div style="font-size: 0.85em; color: gray;">{{Notes}}</div>
-{{/Notes}}
-<script>
-(function() {
-  var el = document.getElementById("de-text");
-  if (!el) return;
-  var txt = el.innerText.trim();
-  if (txt.startsWith("der ") || txt.startsWith("der/")) el.classList.add("gender-der");
-  else if (txt.startsWith("die ") || txt.startsWith("die/")) el.classList.add("gender-die");
-  else if (txt.startsWith("das ") || txt.startsWith("das/")) el.classList.add("gender-das");
-})();
-</script>
-    `.trim(),
-  },
-];
-
 async function ankiConnect(action: string, params: Record<string, any> = {}): Promise<any> {
   let res: Response;
   try {
@@ -80,13 +22,18 @@ async function ankiConnect(action: string, params: Record<string, any> = {}): Pr
 }
 
 async function ensureModelExists() {
+  const css = await Bun.file("./templates/card.css").text();
+  const front = await Bun.file("./templates/front.html").text();
+  const back = await Bun.file("./templates/back.html").text();
+  const cardTemplates = [{ Name: "German Card", Front: front.trim(), Back: back.trim() }];
+
   const models: string[] = await ankiConnect("modelNames");
   if (!models.includes(MODEL_NAME)) {
     await ankiConnect("createModel", {
       modelName: MODEL_NAME,
       inOrderFields: MODEL_FIELDS,
-      css: CARD_CSS,
-      cardTemplates: CARD_TEMPLATES,
+      css,
+      cardTemplates,
     });
     console.log(`✓ Created Note Type "${MODEL_NAME}"`);
   } else {
@@ -96,14 +43,14 @@ async function ensureModelExists() {
           name: MODEL_NAME,
           templates: {
             "German Card": {
-              Front: CARD_TEMPLATES[0].Front,
-              Back: CARD_TEMPLATES[0].Back,
+              Front: cardTemplates[0].Front,
+              Back: cardTemplates[0].Back,
             },
           },
         },
       });
       await ankiConnect("updateModelStyling", {
-        model: { name: MODEL_NAME, css: CARD_CSS },
+        model: { name: MODEL_NAME, css },
       });
     } catch {}
   }

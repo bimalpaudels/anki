@@ -1,0 +1,15 @@
+.card {
+  font-family: arial;
+  font-size: 20px;
+  text-align: center;
+  color: black;
+  background-color: white;
+}
+
+.gender-der { color: #2563eb !important; }
+.gender-die { color: #dc2626 !important; }
+.gender-das { color: #16a34a !important; }
+
+.nightMode .gender-der { color: #89b4fa !important; }
+.nightMode .gender-die { color: #f38ba8 !important; }
+.nightMode .gender-das { color: #a6e3a1 !important; }

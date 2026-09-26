@@ -10,8 +10,12 @@ anki/
 │   ├── verbs.ts       # Verbs data file
 │   ├── nouns.ts       # Nouns data file
 │   └── <topic>.ts     # Any .ts file placed here is auto-discovered!
-├── types.ts           # TypeScript interfaces (VocabItem, CardEntry, etc.)
-├── sync.ts            # Lossless upsert script with bracket cloze parser
+├── templates/
+│   ├── card.css       # Anki card CSS (gender colors, night mode)
+│   ├── front.html     # Front card template
+│   └── back.html      # Back card template
+├── types.ts           # TypeScript interfaces (VocabItem, CardEntry)
+├── sync.ts            # High-performance sync engine
 ├── package.json
 └── README.md
 ```
