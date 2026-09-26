@@ -1,6 +1,6 @@
 import type { VocabItem } from "../types";
 
-export const deck = "Deutsch";
+export const deck = "deutsch";
 
 export const nouns: VocabItem[] = [
   {
